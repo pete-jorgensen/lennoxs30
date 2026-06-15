@@ -17,7 +17,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from lennoxs30api import LENNOX_OUTDOOR_UNIT_HP, lennox_system
+from lennoxs30api import LENNOX_OUTDOOR_UNIT_HP, lennox_system, lennox_zone
 
 from custom_components.lennoxs30.binary_sensor_ble import BleBinarySensor
 
@@ -58,6 +58,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         else:
             sensor = S30CloudConnectedStatus(hass, manager, system)
             sensor_list.append(sensor)
+
+        if manager.create_sensors:
+            # Per-zone boolean states promoted from the climate entity's
+            # extra_state_attributes into their own binary sensors so they are logged
+            # in Home Assistant. Created only when the zone actually reports the value
+            # (is not None), so non-variable / non-zoned units don't get dead entities.
+            for zone in system.zone_list:
+                if zone.is_zone_active():
+                    for descriptor in ZONE_BINARY_ATTRIBUTE_SENSORS:
+                        if getattr(zone, descriptor["attr"]) is not None:
+                            _LOGGER.debug(
+                                "Create S30ZoneAttributeBinarySensor [%s] system [%s] zone [%s]",
+                                descriptor["attr"],
+                                system.sysId,
+                                zone.id,
+                            )
+                            sensor_list.append(S30ZoneAttributeBinarySensor(hass, manager, system, zone, descriptor))
 
         if system.outdoorUnitType == LENNOX_OUTDOOR_UNIT_HP:
             sensor_list.append(S30HeatpumpLowAmbientLockout(hass, manager, system))
@@ -504,4 +521,84 @@ class S30AuxheatHighAmbientLockout(S30BaseEntityMixin, BinarySensorEntity):
         """Return device info."""
         return {
             "identifiers": {(DOMAIN, self._system.unique_id)},
+        }
+
+
+# Per-zone boolean states promoted from the climate entity's extra_state_attributes
+# into their own binary sensors so they are logged/graphable in Home Assistant.
+ZONE_BINARY_ATTRIBUTE_SENSORS = (
+    {"attr": "defrost", "suffix": "_DEF", "name": "defrost", "device_class": BinarySensorDeviceClass.RUNNING, "diagnostic": True},
+    {"attr": "aux", "suffix": "_AUX", "name": "aux_heat", "device_class": BinarySensorDeviceClass.RUNNING, "diagnostic": True},
+    {"attr": "fan", "suffix": "_FANB", "name": "fan", "device_class": BinarySensorDeviceClass.RUNNING, "diagnostic": False},
+    {"attr": "ventilation", "suffix": "_VENTB", "name": "ventilation", "device_class": BinarySensorDeviceClass.RUNNING, "diagnostic": True},
+    {"attr": "heatCoast", "suffix": "_HC", "name": "heat_coast", "device_class": None, "diagnostic": True},
+    {"attr": "coolCoast", "suffix": "_CC", "name": "cool_coast", "device_class": None, "diagnostic": True},
+    {"attr": "ssr", "suffix": "_SSR", "name": "ssr", "device_class": None, "diagnostic": True},
+)
+
+
+class S30ZoneAttributeBinarySensor(S30BaseEntityMixin, BinarySensorEntity):
+    """Generic per-zone binary sensor backed by a single lennox_zone attribute (descriptor-driven)."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        manager: Manager,
+        system: lennox_system,
+        zone: lennox_zone,
+        descriptor: dict,
+    ) -> None:
+        """Create object."""
+        super().__init__(manager, system)
+        self._hass = hass
+        self._zone = zone
+        self._descriptor = descriptor
+        self._myname = self._zone.system.name + "_" + self._zone.name + "_" + descriptor["name"]
+
+    async def async_added_to_hass(self) -> None:
+        """Run when entity about to be added to hass."""
+        _LOGGER.debug("async_added_to_hass S30ZoneAttributeBinarySensor myname [%s]", self._myname)
+        self._zone.registerOnUpdateCallback(self.update_callback, [self._descriptor["attr"]])
+        await super().async_added_to_hass()
+
+    def update_callback(self) -> None:
+        """Process data change."""
+        _LOGGER.debug("update_callback S30ZoneAttributeBinarySensor myname [%s]", self._myname)
+        self.schedule_update_ha_state()
+
+    @property
+    def unique_id(self) -> str:
+        # HA fails with dashes in IDs
+        return (self._zone.system.unique_id + "_" + str(self._zone.id)).replace("-", "") + self._descriptor["suffix"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return extra attributes."""
+        return {}
+
+    @property
+    def name(self) -> str:
+        """Return entity name."""
+        return self._myname
+
+    @property
+    def is_on(self) -> bool:
+        """Return entity state."""
+        return getattr(self._zone, self._descriptor["attr"])
+
+    @property
+    def device_class(self) -> BinarySensorDeviceClass | None:
+        """Return device_class."""
+        return self._descriptor["device_class"]
+
+    @property
+    def entity_category(self) -> EntityCategory | None:
+        """Return entity category."""
+        return EntityCategory.DIAGNOSTIC if self._descriptor["diagnostic"] else None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info."""
+        return {
+            "identifiers": {(DOMAIN, self._zone.unique_id)},
         }

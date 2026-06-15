@@ -16,6 +16,7 @@ from lennoxs30api.s30api_async import (
 from custom_components.lennoxs30 import Manager
 from custom_components.lennoxs30.const import MANAGER
 from custom_components.lennoxs30.sensor import (
+    ZONE_ATTRIBUTE_SENSORS,
     S30ActiveAlertsList,
     S30AlertSensor,
     S30DiagSensor,
@@ -23,6 +24,7 @@ from custom_components.lennoxs30.sensor import (
     S30InverterPowerSensor,
     S30OutdoorTempSensor,
     S30TempSensor,
+    S30ZoneAttributeSensor,
     S30ZoneDemandSensor,
     async_setup_entry,
 )
@@ -167,11 +169,16 @@ async def test_async_setup_entry(hass, manager: Manager, caplog):
         await async_setup_entry(hass, entry, async_add_entities)
         assert async_add_entities.called == 1
         sensor_list = async_add_entities.call_args[0][0]
-        assert len(sensor_list) == 3 * system.numberOfZones
-        for i in range(system.numberOfZones):
-            assert isinstance(sensor_list[i * 3], S30TempSensor)
-            assert isinstance(sensor_list[(i * 3) + 1], S30HumiditySensor)
-            assert isinstance(sensor_list[(i * 3) + 2], S30ZoneDemandSensor)
+        zone_count = system.numberOfZones
+        active_zones = [z for z in system.zone_list if z.is_zone_active()]
+        # Temp + humidity are created for every active zone
+        assert sum(isinstance(s, S30TempSensor) for s in sensor_list) == zone_count
+        assert sum(isinstance(s, S30HumiditySensor) for s in sensor_list) == zone_count
+        # Demand + the other per-zone attribute sensors are created only when reported
+        assert sum(isinstance(s, S30ZoneDemandSensor) for s in sensor_list) == sum(1 for z in active_zones if z.demand is not None)
+        assert sum(isinstance(s, S30ZoneAttributeSensor) for s in sensor_list) == sum(
+            1 for z in active_zones for d in ZONE_ATTRIBUTE_SENSORS if getattr(z, d["attr"]) is not None
+        )
         assert len(caplog.records) == 0
 
     # Diagnostic Sensors
@@ -369,9 +376,8 @@ async def test_zone_demand_sensor_skipped_when_no_demand(hass, manager: Manager)
     await async_setup_entry(hass, entry, async_add_entities)
     sensor_list = async_add_entities.call_args[0][0]
 
+    # No demand sensor when no zone reports demand
     assert not any(isinstance(s, S30ZoneDemandSensor) for s in sensor_list)
-    # Temp + humidity are still created for each active zone (2 per zone, no demand sensor)
-    assert len(sensor_list) == 2 * system.numberOfZones
-    for i in range(system.numberOfZones):
-        assert isinstance(sensor_list[i * 2], S30TempSensor)
-        assert isinstance(sensor_list[(i * 2) + 1], S30HumiditySensor)
+    # Temp + humidity are still created for each active zone
+    assert sum(isinstance(s, S30TempSensor) for s in sensor_list) == system.numberOfZones
+    assert sum(isinstance(s, S30HumiditySensor) for s in sensor_list) == system.numberOfZones

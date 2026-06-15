@@ -22,6 +22,7 @@ from homeassistant.const import (
     UnitOfFrequency,
     UnitOfPower,
     UnitOfTemperature,
+    UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -134,6 +135,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                     if zone.demand is not None:
                         _LOGGER.debug("Create S30ZoneDemandSensor sensor system [%s] zone [%s]", system.sysId, zone.id)
                         sensor_list.append(S30ZoneDemandSensor(hass, manager, system, zone))
+                    # Additional per-zone values promoted from the climate entity's
+                    # extra_state_attributes. Each is created only when the zone actually
+                    # reports it (is not None), so non-variable / non-zoned units don't get
+                    # dead entities (same discipline as the demand sensor above).
+                    for descriptor in ZONE_ATTRIBUTE_SENSORS:
+                        if getattr(zone, descriptor["attr"]) is not None:
+                            _LOGGER.debug(
+                                "Create S30ZoneAttributeSensor [%s] system [%s] zone [%s]",
+                                descriptor["attr"],
+                                system.sysId,
+                                zone.id,
+                            )
+                            sensor_list.append(S30ZoneAttributeSensor(hass, manager, system, zone, descriptor))
+
+            # System-level values promoted from extra_state_attributes (ventilation timers,
+            # alert counts, wifi link rate, smart-away state). Gated by capability + reported.
+            for descriptor in SYSTEM_ATTRIBUTE_SENSORS:
+                if descriptor["group"] == "ventilation" and not system.supports_ventilation():
+                    continue
+                if descriptor["group"] == "lan" and not manager.api.isLANConnection:
+                    continue
+                if getattr(system, descriptor["attr"]) is None:
+                    continue
+                _LOGGER.debug("Create S30SystemAttributeSensor [%s] system [%s]", descriptor["attr"], system.sysId)
+                sensor_list.append(S30SystemAttributeSensor(hass, manager, system, descriptor))
 
         if manager.create_alert_sensors:
             sensor_list.append(S30AlertSensor(hass, manager, system))
@@ -640,6 +666,285 @@ class S30ZoneDemandSensor(S30BaseEntityMixin, SensorEntity):
         """Return device info."""
         return {
             "identifiers": {(DOMAIN, self._zone.unique_id)},
+        }
+
+
+# Per-zone values promoted from the climate entity's extra_state_attributes into
+# their own sensors so they are logged/graphable in Home Assistant. A "unit" of
+# "__temp__" resolves to the system's configured temperature unit at runtime.
+ZONE_ATTRIBUTE_SENSORS = (
+    {
+        "attr": "damper",
+        "suffix": "_DMP",
+        "name": "damper",
+        "unit": PERCENTAGE,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "device_class": None,
+        "diagnostic": False,
+    },
+    {
+        "attr": "balancePoint",
+        "suffix": "_BP",
+        "name": "balance_point",
+        "unit": "__temp__",
+        "state_class": SensorStateClass.MEASUREMENT,
+        "device_class": SensorDeviceClass.TEMPERATURE,
+        "diagnostic": True,
+    },
+    {
+        "attr": "tempOperation",
+        "suffix": "_TOP",
+        "name": "temp_operation",
+        "unit": None,
+        "state_class": None,
+        "device_class": None,
+        "diagnostic": True,
+    },
+    {
+        "attr": "humOperation",
+        "suffix": "_HOP",
+        "name": "hum_operation",
+        "unit": None,
+        "state_class": None,
+        "device_class": None,
+        "diagnostic": True,
+    },
+)
+
+# System-level values promoted from extra_state_attributes. "group" selects the
+# capability gate applied at setup ("ventilation" -> supports_ventilation(),
+# "lan" -> isLANConnection, "system" -> always).
+SYSTEM_ATTRIBUTE_SENSORS = (
+    {
+        "attr": "ventilationRemainingTime",
+        "suffix": "_VRT",
+        "name": "ventilation_remaining_time",
+        "unit": UnitOfTime.MINUTES,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "device_class": SensorDeviceClass.DURATION,
+        "diagnostic": False,
+        "group": "ventilation",
+    },
+    {
+        "attr": "diagVentilationRuntime",
+        "suffix": "_DVR",
+        "name": "ventilation_runtime",
+        "unit": None,
+        "state_class": None,
+        "device_class": None,
+        "diagnostic": True,
+        "group": "ventilation",
+    },
+    {
+        "attr": "ventilatingUntilTime",
+        "suffix": "_VUT",
+        "name": "ventilating_until_time",
+        "unit": None,
+        "state_class": None,
+        "device_class": None,
+        "diagnostic": True,
+        "group": "ventilation",
+    },
+    {
+        "attr": "alerts_num_in_active_array",
+        "suffix": "_ANA",
+        "name": "active_alerts_count",
+        "unit": None,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "device_class": None,
+        "diagnostic": True,
+        "group": "system",
+    },
+    {
+        "attr": "alerts_num_cleared",
+        "suffix": "_ANCL",
+        "name": "alerts_cleared_count",
+        "unit": None,
+        "state_class": None,
+        "device_class": None,
+        "diagnostic": True,
+        "group": "system",
+    },
+    {
+        "attr": "alerts_last_cleared_id",
+        "suffix": "_ALCI",
+        "name": "last_cleared_alert_id",
+        "unit": None,
+        "state_class": None,
+        "device_class": None,
+        "diagnostic": True,
+        "group": "system",
+    },
+    {
+        "attr": "wifi_bitRate",
+        "suffix": "_WBR",
+        "name": "wifi_bitrate",
+        "unit": None,
+        "state_class": None,
+        "device_class": None,
+        "diagnostic": True,
+        "group": "lan",
+    },
+    {
+        "attr": "sa_state",
+        "suffix": "_SAST",
+        "name": "smart_away_state",
+        "unit": None,
+        "state_class": None,
+        "device_class": None,
+        "diagnostic": True,
+        "group": "system",
+    },
+    {
+        "attr": "sa_setpointState",
+        "suffix": "_SASP",
+        "name": "smart_away_setpoint_state",
+        "unit": None,
+        "state_class": None,
+        "device_class": None,
+        "diagnostic": True,
+        "group": "system",
+    },
+)
+
+
+class S30ZoneAttributeSensor(S30BaseEntityMixin, SensorEntity):
+    """Generic per-zone sensor backed by a single lennox_zone attribute (descriptor-driven)."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        manager: Manager,
+        system: lennox_system,
+        zone: lennox_zone,
+        descriptor: dict,
+    ):
+        super().__init__(manager, system)
+        self._hass = hass
+        self._zone = zone
+        self._descriptor = descriptor
+        self._myname = self._zone.system.name + "_" + self._zone.name + "_" + descriptor["name"]
+
+    async def async_added_to_hass(self) -> None:
+        """Run when entity about to be added to hass."""
+        _LOGGER.debug("async_added_to_hass S30ZoneAttributeSensor myname [%s]", self._myname)
+        self._zone.registerOnUpdateCallback(self.update_callback, [self._descriptor["attr"]])
+        await super().async_added_to_hass()
+
+    def update_callback(self):
+        """Callback to execute on data change"""
+        _LOGGER.debug("update_callback S30ZoneAttributeSensor myname [%s]", self._myname)
+        self.schedule_update_ha_state()
+
+    @property
+    def unique_id(self) -> str:
+        # HA fails with dashes in IDs
+        return (self._zone.system.unique_id + "_" + str(self._zone.id)).replace("-", "") + self._descriptor["suffix"]
+
+    @property
+    def extra_state_attributes(self):
+        """Return the state attributes."""
+        return {}
+
+    @property
+    def name(self):
+        return self._myname
+
+    @property
+    def native_value(self):
+        return getattr(self._zone, self._descriptor["attr"])
+
+    @property
+    def native_unit_of_measurement(self):
+        unit = self._descriptor["unit"]
+        if unit == "__temp__":
+            return UnitOfTemperature.CELSIUS if self._manager.is_metric else UnitOfTemperature.FAHRENHEIT
+        return unit
+
+    @property
+    def device_class(self):
+        return self._descriptor["device_class"]
+
+    @property
+    def state_class(self):
+        return self._descriptor["state_class"]
+
+    @property
+    def entity_category(self):
+        return EntityCategory.DIAGNOSTIC if self._descriptor["diagnostic"] else None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info."""
+        return {
+            "identifiers": {(DOMAIN, self._zone.unique_id)},
+        }
+
+
+class S30SystemAttributeSensor(S30BaseEntityMixin, SensorEntity):
+    """Generic system-level sensor backed by a single lennox_system attribute (descriptor-driven)."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        manager: Manager,
+        system: lennox_system,
+        descriptor: dict,
+    ):
+        super().__init__(manager, system)
+        self._hass = hass
+        self._descriptor = descriptor
+        self._myname = self._system.name + "_" + descriptor["name"]
+
+    async def async_added_to_hass(self) -> None:
+        """Run when entity about to be added to hass."""
+        _LOGGER.debug("async_added_to_hass S30SystemAttributeSensor myname [%s]", self._myname)
+        self._system.registerOnUpdateCallback(self.update_callback, [self._descriptor["attr"]])
+        await super().async_added_to_hass()
+
+    def update_callback(self):
+        """Callback to execute on data change"""
+        _LOGGER.debug("update_callback S30SystemAttributeSensor myname [%s]", self._myname)
+        self.schedule_update_ha_state()
+
+    @property
+    def unique_id(self) -> str:
+        return helper_create_system_unique_id(self._system, self._descriptor["suffix"])
+
+    @property
+    def extra_state_attributes(self):
+        """Return the state attributes."""
+        return {}
+
+    @property
+    def name(self):
+        return self._myname
+
+    @property
+    def native_value(self):
+        return getattr(self._system, self._descriptor["attr"])
+
+    @property
+    def native_unit_of_measurement(self):
+        return self._descriptor["unit"]
+
+    @property
+    def device_class(self):
+        return self._descriptor["device_class"]
+
+    @property
+    def state_class(self):
+        return self._descriptor["state_class"]
+
+    @property
+    def entity_category(self):
+        return EntityCategory.DIAGNOSTIC if self._descriptor["diagnostic"] else None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info."""
+        return {
+            "identifiers": {(DOMAIN, self._system.unique_id)},
         }
 
 
