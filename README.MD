@@ -1,3 +1,7 @@
+> **This is a fork of [PeteRager/lennoxs30](https://github.com/PeteRager/lennoxs30).** It adds per-zone diagnostic and status sensors (operation, defrost, aux, damper, coast, ventilation, demand) on top of the upstream integration.
+> Read branch **`zone-extra-sensors`**; `master` mirrors upstream unchanged.
+> Changes meant for upstream are prepared as patch series against `master`.
+
 # Lennox S40/S30/E30/M30 Component
 
 A custom component for Home Assistant to integrate with Lennox iComfort S40, S30, E30 or M30 thermostats; supporting local LAN connections and Lennox
