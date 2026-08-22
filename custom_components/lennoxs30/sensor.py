@@ -129,9 +129,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                     # Zone CFM demand is only reported by variable-capacity systems; staged /
                     # single-stage units leave zone.demand as None. Only create the sensor when
                     # the device actually reports demand, to avoid a dead entity on non-variable
-                    # equipment. (A stricter alternative, pending testing on non-variable gear, is
-                    # to gate on the equipment capacity-type parameter: "Variable Capacity" /
-                    # "Load Tracking Variable Capacity" vs "Staged".)
+                    # equipment.
                     if zone.demand is not None:
                         _LOGGER.debug("Create S30ZoneDemandSensor sensor system [%s] zone [%s]", system.sysId, zone.id)
                         sensor_list.append(S30ZoneDemandSensor(hass, manager, system, zone))
